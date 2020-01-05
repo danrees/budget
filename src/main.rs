@@ -3,33 +3,34 @@
 //row to vector of values? vector of enum type for a row, transaction?
 //#[macro_use]
 //extern crate diesel;
+//extern crate dotenv;
 
 use std::path::Path;
 use std::error::Error;
-use serde::Deserialize;
+//use serde::Deserialize;
 use std::process;
 use csv::Trim;
 
 //use diesel::prelude::*;
+use budget::models::*;
+use budget::{establish_connection, create_transaction};
 
-#[derive(Debug,Deserialize)]
-struct Transaction {
-    #[serde(rename = "Date")]
-    date: String,
-    #[serde(rename = "Transaction Details")]
-    transaction_details: String,
-    #[serde(rename = "Funds Out")]
-    funds_out: Option<f64>,
-    #[serde(rename = "Funds In")]
-    funds_in: Option<f64>,
-}
 
 fn print_me(path: &Path) -> Result<(),Box< Error>> {
+
+
     let mut rdr = csv::ReaderBuilder::new().trim(Trim::Headers).from_path(path)?;
     println!("{:?}",rdr.headers());
+
+    let conn = establish_connection();
+
+
+
     for result in rdr.deserialize() {
         let record: Transaction = result?;
-        println!("{:?}",record)
+        //println!("{:?}",record)
+        let trans = create_transaction(&conn, record);
+        println!("{:?}", trans)
     }
     Ok(())
 }
