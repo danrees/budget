@@ -22,3 +22,32 @@ pub struct SavedTransaction {
     funds_out: BigDecimal,
     funds_in: BigDecimal,
 }
+
+#[derive(Debug,Queryable)]
+pub struct Category {
+    id: i32,
+    name: String,
+}
+
+#[derive(Debug,Insertable)]
+pub struct NewCategory {
+    id: i32,
+    name: String,
+}
+
+#[derive(Debug,Queryable)]
+#[belongs_to(Transaction)]
+#[belongs_to(Category)]
+pub struct TransactionCategory {
+    id: i32,
+    transaction_id: i32,
+    category_id: i32
+}
+
+#[derive(Debug,Insertable)]
+#[belongs_to(Transaction)]
+#[belongs_to(Category)]
+pub struct NewTransactionCategory {
+    transaction_id: i32,
+    category_id: i32
+}
