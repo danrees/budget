@@ -1,93 +1,55 @@
-#![feature(proc_macro_hygiene, decl_macro)]
+use actix_multipart::Multipart;
+use actix_web::{middleware, web, App, Error, HttpResponse, HttpServer};
+use futures::{StreamExt, TryStreamExt};
+use std::io::Write;
 
-use serde::{Deserialize,Serialize};
-use rocket::{get, post, routes, FromForm, Data};
-use rocket::http::{ContentType,Status};
-use rocket::data::{FromData, Transformed, Outcome, Transform};
-use rocket::response::{
-    Stream,
-    status::Custom,
-};
-use rocket::request::Form;
-use rocket_contrib::json::*;
-use rocket::config::{Config,Environment,};
-use std::io::{self,Cursor,Write};
-use multipart::{
-    mock::StdoutTee,
-    server::{
-        save::Entries,
-        Multipart
-    },
-};
-use multipart::server::save::SaveResult::*;
+async fn save_file(mut payload: Multipart) -> Result<HttpResponse, Error> {
+    while let Ok(Some(mut field)) = payload.try_next().await {
+        //TODO: replace unwrap
+        let content_type = field.content_disposition().unwrap();
+        let filename = content_type.get_filename().unwrap();
+        let filepath = format!("./tmp/{}", sanitize_filename::sanitize(&filename));
 
-#[post("/upload", data="<data>")]
-fn multipart_uploadfile(ct: &ContentType, data: Data) -> Result<Stream<Cursor<Vec<u8>>>,Custom<String>> {
-    if !ct.is_form_data() {
-        return Err(Custom(
-            Status::BadRequest,
-            "Content-type not multipart/form-data".into()
-        ));
+        let mut f = web::block(|| std::fs::File::create(filepath))
+            .await
+            .unwrap();
+
+        while let Some(chunk) = field.next().await {
+            let data = chunk.unwrap();
+            f = web::block(move || f.write_all(&data).map(|_| f)).await?;
+        }
     }
-    let (_,boundry) = ct.params().find(|&(k,_)| k == "boundary").ok_or_else(
-        || Custom(
-            Status::BadRequest,
-            "`Content-Type: multipart/form-data` boundary param not provided".into()
+    Ok(HttpResponse::Ok().into())
+}
+
+fn index() -> HttpResponse {
+    let html = r#"<html>
+        <head><title>Upload Test</title></head>
+        <body>
+            <form target="/" method="post" enctype="multipart/form-data">
+                <input type="file" multiple name="file"/>
+                <input type="submit" value="Submit"></button>
+            </form>
+        </body>
+    </html>"#;
+    HttpResponse::Ok().body(html)
+}
+
+#[actix_rt::main]
+async fn main() -> std::io::Result<()> {
+    std::env::set_var("RUST_LOG", "actix_server=info,actix_web=info");
+    std::fs::create_dir_all("./tmp").unwrap();
+
+    let ip = "0.0.0.0:3000";
+
+    HttpServer::new(|| {
+        App::new().wrap(middleware::Logger::default()).service(
+            web::resource("/")
+                .route(web::get().to(index))
+                .route(web::post().to(save_file)),
         )
-    )?;
-    match process_upload(boundry, data) {
-        Ok(resp) => Ok(Stream::from(Cursor::new(resp))),
-        Err(e) => Err(Custom(Status::InternalServerError, e.to_string()))
-    }
-}
-
-fn process_upload(boundary: &str, data: Data) -> io::Result<Vec<u8>> {
-    let mut out = Vec::new();
-
-    match Multipart::with_body(data.open(),boundary).save().temp() {
-        Full(entries) => process_entries(entries, &mut out)?,
-        Partial(partial,reason) => {
-            writeln!(out,"Request partially processed: {:?}", reason)?;
-            if let Some(field) = partial.partial {
-                writeln!(out, "Stopped on field: {:?}", field.source.headers)?;
-            }
-            process_entries(partial.entries, &mut out)?
-        },
-        Error(e) => return Err(e),
-    }
-
-    Ok(out)
-}
-
-fn process_entries(entries: Entries, mut out: &mut Vec<u8>) -> io::Result<()> {
-    
-    {
-        let stdout = io::stdout();
-        let tree = StdoutTee::new(&mut out, &stdout);
-        entries.write_debug(tree)?;
-    }
-    writeln!(out, "Entries processed")
-}
-
-#[derive(Debug,FromForm,Deserialize,Serialize)]
-struct Person {
-    name: String,
-}
-
-#[get("/")]
-fn index() -> Json<Person> {
-    Json(Person{name: String::from("world")})
-}
-
-#[post("/", data = "<input>")]
-fn save_name(input: Json<Person>) -> String {
-    format!("Hello {}",input.name)
-}
-
-fn main() {
-    //Need to set up a webserver
-
-    rocket::ignite()
-        .mount("/", routes![index,save_name,multipart_uploadfile])
-        .launch();
+    })
+    .bind(ip)?
+    .run()
+    .await
 }
